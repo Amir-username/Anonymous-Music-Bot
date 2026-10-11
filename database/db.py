@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 
 import aiosqlite
 
-from database.models import AnonymousUser, Owner, OwnerSettings, SCHEMA
+from database.models import AnonymousUser, Owner, OwnerSettings, OwnerStats, SCHEMA
 from utils.anonymous_id import generate_anonymous_id, generate_link_code, hash_telegram_id
 
 logger = logging.getLogger(__name__)
@@ -220,3 +220,16 @@ class Database:
         ) as cur:
             row = await cur.fetchone()
         return row["c"]
+
+        # ---------- stats ----------
+
+    async def get_stats(self, owner_id: int) -> OwnerStats:
+        async with self._conn.execute(
+            "SELECT "
+            "(SELECT COUNT(*) FROM users WHERE owner_id = ?)    AS users, "
+            "(SELECT COUNT(*) FROM messages WHERE owner_id = ?) AS messages, "
+            "(SELECT COUNT(*) FROM bans WHERE owner_id = ?)     AS bans",
+            (owner_id, owner_id, owner_id),
+        ) as cur:
+            row = await cur.fetchone()
+        return OwnerStats(users=row["users"], messages=row["messages"], bans=row["bans"])

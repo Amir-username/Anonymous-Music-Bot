@@ -8,6 +8,8 @@ from aiogram.types import Message, ReplyParameters
 from database.db import Database
 from utils.filters import extract_audio
 
+from config import Config
+
 router = Router(name="user")
 
 
@@ -84,7 +86,10 @@ async def handle_music(message: Message, bot: Bot, db: Database) -> None:
 
 
 @router.message(F.text)
-async def handle_text(message: Message, db: Database) -> None:
+async def handle_text(message: Message, db: Database, config: Config) -> None:
+    if message.from_user.id == config.owner_id:
+        await message.answer("🤖 That's your own inbox! Send /help to see your commands.")
+        return
     if await db.get_session_owner(message.from_user.id) is None:
         await message.answer("👋 Open the owner's personal link first — then send music here.")
     else:

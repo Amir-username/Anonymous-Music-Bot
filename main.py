@@ -9,7 +9,7 @@ from aiogram.enums import ParseMode
 
 from config import get_config
 from database.db import Database
-from handlers import common, owner, user
+from handlers import common, errors, owner, user
 
 async def health(request: web.Request) -> web.Response:
     return web.Response(text="OK")
@@ -32,7 +32,7 @@ async def main() -> None:
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
     dp = Dispatcher()
-    dp.include_routers(owner.router, common.router, user.router)
+    dp.include_routers(errors.router, owner.router, common.router, user.router)
     dp["db"] = db        # injected into handlers that request `db`
     dp["config"] = config  # injected into handlers that request `config`
 

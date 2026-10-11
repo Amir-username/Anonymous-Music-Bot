@@ -64,3 +64,10 @@ class AnonymousUser:
     owner_id: int
     anonymous_id: str
     created_at: str
+
+
+@dataclass
+class OwnerStats:
+    users: int
+    messages: int
+    bans: int

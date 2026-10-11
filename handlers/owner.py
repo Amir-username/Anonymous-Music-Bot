@@ -101,3 +101,18 @@ async def cmd_bans(message: Message, db: Database, config: Config) -> None:
         await message.answer("Nobody is banned. 🎉")
     else:
         await message.answer("🚫 <b>Banned users:</b>\n" + "\n".join(bans))
+
+
+@router.message(Command("status"))
+async def cmd_status(message: Message, db: Database, config: Config) -> None:
+    if not await _ensure_owner(message, config):
+        return
+    stats = await db.get_stats(config.owner_id)
+    settings = await db.get_settings(config.owner_id)
+    await message.answer(
+        "📊 <b>Status</b>\n\n"
+        f"✍️ Captions: {'allowed ✅' if settings.captions_allowed else 'disabled 🚫'}\n"
+        f"👥 Anonymous listeners: <b>{stats.users}</b>\n"
+        f"🎵 Tracks delivered: <b>{stats.messages}</b>\n"
+        f"🚫 Banned: <b>{stats.bans}</b>"
+    )
