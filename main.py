@@ -23,7 +23,7 @@ async def main() -> None:
     )
     config = get_config()
 
-    db = Database(config.db_path, config.hash_secret, config.rate_limit_daily)
+    db = Database(config.database_url, config.hash_secret, config.rate_limit_daily)
     await db.connect()
     await db.initialize()
     await db.ensure_owner(config.owner_id)  # bootstrap the primary owner
@@ -44,8 +44,10 @@ async def main() -> None:
     site = web.TCPSite(runner, host="0.0.0.0", port=int(os.getenv("PORT", "8000")))
     await site.start()
 
-    await bot.delete_webhook(drop_pending_updates=True)
+    # Don't drop pending updates: messages sent during downtime get delivered late
+    await bot.delete_webhook(drop_pending_updates=False)
     try:
+        # aiogram handles SIGINT/SIGTERM gracefully (Render sends SIGTERM on deploys)
         await dp.start_polling(bot)
     finally:
         await bot.session.close()
