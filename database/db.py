@@ -128,6 +128,26 @@ class Database:
             row = await cur.fetchone()
         return AnonymousUser(**dict(row)) if row else None
 
+    # ---------- sessions ----------
+
+    async def set_session(self, telegram_id: int, owner_id: int) -> None:
+        """Remember which owner's inbox this user is currently connected to."""
+        await self._conn.execute(
+            "INSERT INTO sessions (id_hash, owner_id, connected_at) VALUES (?, ?, ?) "
+            "ON CONFLICT(id_hash) DO UPDATE SET owner_id = excluded.owner_id, "
+            "connected_at = excluded.connected_at",
+            (self._hash(telegram_id), owner_id, _now()),
+        )
+        await self._conn.commit()
+
+    async def get_session_owner(self, telegram_id: int) -> int | None:
+        async with self._conn.execute(
+            "SELECT owner_id FROM sessions WHERE id_hash = ?",
+            (self._hash(telegram_id),),
+        ) as cur:
+            row = await cur.fetchone()
+        return row["owner_id"] if row else None
+
     # ---------- bans ----------
 
     async def ban_user(self, owner_id: int, anonymous_id: str) -> bool:

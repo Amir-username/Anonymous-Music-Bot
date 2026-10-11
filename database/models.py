@@ -18,6 +18,12 @@ CREATE TABLE IF NOT EXISTS users (
     UNIQUE (id_hash, owner_id)
 );
 
+CREATE TABLE IF NOT EXISTS sessions (
+    id_hash      TEXT PRIMARY KEY,
+    owner_id     INTEGER NOT NULL REFERENCES owners(owner_id),
+    connected_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS bans (
     owner_id     INTEGER NOT NULL REFERENCES owners(owner_id),
     anonymous_id TEXT    NOT NULL,
