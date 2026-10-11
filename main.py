@@ -8,7 +8,8 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 
 from config import get_config
-from handlers import common
+from database.db import Database
+from handlers import common, owner
 
 
 async def health(request: web.Request) -> web.Response:
@@ -22,14 +23,20 @@ async def main() -> None:
     )
     config = get_config()
 
+    db = Database(config.db_path, config.hash_secret)
+    await db.connect()
+    await db.initialize()
+    await db.ensure_owner(config.owner_id)  # bootstrap the primary owner
+
     bot = Bot(
         token=config.bot_token,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
     dp = Dispatcher()
-    dp.include_router(common.router)
+    dp.include_routers(owner.router, common.router)
+    dp["db"] = db        # injected into handlers that request `db`
+    dp["config"] = config  # injected into handlers that request `config`
 
-    # Minimal HTTP server so Koyeb's health check passes
     app = web.Application()
     app.router.add_get("/", health)
     runner = web.AppRunner(app)
@@ -43,6 +50,7 @@ async def main() -> None:
     finally:
         await bot.session.close()
         await runner.cleanup()
+        await db.close()
 
 
 if __name__ == "__main__":
