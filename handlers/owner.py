@@ -13,6 +13,7 @@ router = Router(name="owner")
 
 # Matches the alphabet in anonymous_id.py (no 0/O, no 1/I)
 ANON_ID_RE = re.compile(r"^#[A-HJ-NP-Z2-9]{6}$")
+LIMIT_MAX = 100
 
 
 async def _ensure_owner(message: Message, config: Config) -> bool:
@@ -54,6 +55,44 @@ async def cmd_captions(message: Message, command: CommandObject, db: Database, c
             f"Captions are currently <b>{state}</b>.\n"
             "Usage: <code>/captions on</code> or <code>/captions off</code>"
         )
+
+
+@router.message(Command("limit"))
+async def cmd_limit(message: Message, command: CommandObject, db: Database, config: Config) -> None:
+    if not await _ensure_owner(message, config):
+        return
+
+    arg = (command.args or "").strip().lower()
+    settings = await db.get_settings(config.owner_id)
+
+    if not arg:
+        current = (
+            f"<b>{settings.daily_limit} songs per day</b>"
+            if settings.daily_limit > 0
+            else "<b>unlimited</b>"
+        )
+        await message.answer(
+            f"📊 Daily limit: {current}.\n"
+            "Usage: <code>/limit 10</code> (1–100) or <code>/limit off</code>"
+        )
+        return
+
+    if arg in ("off", "unlimited"):
+        await db.set_daily_limit(config.owner_id, 0)
+        await message.answer("✅ Limit removed — your inbox now accepts unlimited songs.")
+        return
+
+    if not arg.isdigit() or int(arg) > LIMIT_MAX or int(arg) < 1:
+        await message.answer(
+            f"⚠️ Give me a number from 1 to {LIMIT_MAX}, or <code>off</code>.\n"
+            "Example: <code>/limit 3</code>"
+        )
+        return
+
+    await db.set_daily_limit(config.owner_id, int(arg))
+    await message.answer(
+        f"📊 Done — your inbox now accepts <b>{arg} song(s) per day</b> from each listener."
+    )
 
 
 @router.message(Command("ban"))
@@ -109,10 +148,12 @@ async def cmd_status(message: Message, db: Database, config: Config) -> None:
         return
     stats = await db.get_stats(config.owner_id)
     settings = await db.get_settings(config.owner_id)
+    limit = f"{settings.daily_limit} songs/day" if settings.daily_limit > 0 else "unlimited"
     await message.answer(
         "📊 <b>Status</b>\n\n"
         f"✍️ Captions: {'allowed ✅' if settings.captions_allowed else 'disabled 🚫'}\n"
+        f"🎵 Daily limit: {limit}\n"
         f"👥 Anonymous listeners: <b>{stats.users}</b>\n"
-        f"🎵 Tracks delivered: <b>{stats.messages}</b>\n"
+        f"🎧 Tracks delivered: <b>{stats.messages}</b>\n"
         f"🚫 Banned: <b>{stats.bans}</b>"
     )

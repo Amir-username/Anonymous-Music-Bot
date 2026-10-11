@@ -17,9 +17,10 @@ def _now() -> str:
 
 
 class Database:
-    def __init__(self, path: str, hash_secret: str) -> None:
+    def __init__(self, path: str, hash_secret: str, default_daily_limit: int = 5) -> None:
         self.path = path
         self._hash_secret = hash_secret
+        self._default_daily_limit = default_daily_limit
         self._conn: aiosqlite.Connection | None = None
 
     def _hash(self, telegram_id: int) -> str:
@@ -37,6 +38,17 @@ class Database:
 
     async def initialize(self) -> None:
         await self._conn.executescript(SCHEMA)
+        # Migration: databases created before the per-owner limit don't have the column
+        async with self._conn.execute("PRAGMA table_info(settings)") as cur:
+            columns = {row["name"] for row in await cur.fetchall()}
+        if "daily_limit" not in columns:
+            await self._conn.execute("ALTER TABLE settings ADD COLUMN daily_limit INTEGER")
+            logger.info("Migrated settings: added daily_limit column")
+        # Backfill rows created before this feature existed
+        await self._conn.execute(
+            "UPDATE settings SET daily_limit = ? WHERE daily_limit IS NULL",
+            (self._default_daily_limit,),
+        )
         await self._conn.commit()
         logger.info("Database schema ready")
 
@@ -74,8 +86,9 @@ class Database:
             (owner_id, generate_link_code(), _now()),
         )
         await self._conn.execute(
-            "INSERT OR IGNORE INTO settings (owner_id, captions_allowed) VALUES (?, 1)",
-            (owner_id,),
+            "INSERT OR IGNORE INTO settings (owner_id, captions_allowed, daily_limit) "
+            "VALUES (?, 1, ?)",
+            (owner_id, self._default_daily_limit),
         )
         await self._conn.commit()
         logger.info("New owner registered: %s", owner_id)
@@ -186,21 +199,30 @@ class Database:
 
     async def get_settings(self, owner_id: int) -> OwnerSettings:
         async with self._conn.execute(
-            "SELECT owner_id, captions_allowed FROM settings WHERE owner_id = ?",
+            "SELECT owner_id, captions_allowed, daily_limit FROM settings WHERE owner_id = ?",
             (owner_id,),
         ) as cur:
             row = await cur.fetchone()
         if row:
-            return OwnerSettings(row["owner_id"], bool(row["captions_allowed"]))
-        # Row missing (e.g. owner created before settings existed) — self-heal
+            return OwnerSettings(row["owner_id"], bool(row["captions_allowed"]), row["daily_limit"])
+        # Row missing — self-heal with defaults
         await self.set_captions_allowed(owner_id, True)
-        return OwnerSettings(owner_id, True)
+        return OwnerSettings(owner_id, True, self._default_daily_limit)
 
     async def set_captions_allowed(self, owner_id: int, allowed: bool) -> None:
         await self._conn.execute(
-            "INSERT INTO settings (owner_id, captions_allowed) VALUES (?, ?) "
+            "INSERT INTO settings (owner_id, captions_allowed, daily_limit) VALUES (?, ?, ?) "
             "ON CONFLICT(owner_id) DO UPDATE SET captions_allowed = excluded.captions_allowed",
-            (owner_id, int(allowed)),
+            (owner_id, int(allowed), self._default_daily_limit),
+        )
+        await self._conn.commit()
+
+    async def set_daily_limit(self, owner_id: int, limit: int) -> None:
+        """limit = 0 means unlimited."""
+        await self._conn.execute(
+            "INSERT INTO settings (owner_id, captions_allowed, daily_limit) VALUES (?, 1, ?) "
+            "ON CONFLICT(owner_id) DO UPDATE SET daily_limit = excluded.daily_limit",
+            (owner_id, limit),
         )
         await self._conn.commit()
 
@@ -221,7 +243,22 @@ class Database:
             row = await cur.fetchone()
         return row["c"]
 
-        # ---------- stats ----------
+    async def count_messages_today(self, owner_id: int, anonymous_id: str) -> int:
+        """Deliveries since UTC midnight for this anonymous ID.
+
+        Works via string comparison because sent_at is ISO-8601:
+        everything from today starts with today's date prefix.
+        """
+        today = datetime.now(timezone.utc).date().isoformat()
+        async with self._conn.execute(
+            "SELECT COUNT(*) AS c FROM messages "
+            "WHERE owner_id = ? AND anonymous_id = ? AND sent_at >= ?",
+            (owner_id, anonymous_id, today),
+        ) as cur:
+            row = await cur.fetchone()
+        return row["c"]
+
+    # ---------- stats ----------
 
     async def get_stats(self, owner_id: int) -> OwnerStats:
         async with self._conn.execute(

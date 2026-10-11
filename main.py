@@ -11,6 +11,7 @@ from config import get_config
 from database.db import Database
 from handlers import common, errors, owner, user
 
+
 async def health(request: web.Request) -> web.Response:
     return web.Response(text="OK")
 
@@ -22,7 +23,7 @@ async def main() -> None:
     )
     config = get_config()
 
-    db = Database(config.db_path, config.hash_secret)
+    db = Database(config.db_path, config.hash_secret, config.rate_limit_daily)
     await db.connect()
     await db.initialize()
     await db.ensure_owner(config.owner_id)  # bootstrap the primary owner

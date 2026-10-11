@@ -33,7 +33,8 @@ CREATE TABLE IF NOT EXISTS bans (
 
 CREATE TABLE IF NOT EXISTS settings (
     owner_id         INTEGER PRIMARY KEY REFERENCES owners(owner_id),
-    captions_allowed INTEGER NOT NULL DEFAULT 1
+    captions_allowed INTEGER NOT NULL DEFAULT 1,
+    daily_limit      INTEGER NOT NULL DEFAULT 5
 );
 
 CREATE TABLE IF NOT EXISTS messages (
@@ -56,6 +57,7 @@ class Owner:
 class OwnerSettings:
     owner_id: int
     captions_allowed: bool
+    daily_limit: int
 
 
 @dataclass

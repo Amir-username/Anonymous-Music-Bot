@@ -5,16 +5,15 @@ import html
 from aiogram import Bot, F, Router
 from aiogram.types import Message, ReplyParameters
 
+from config import Config
 from database.db import Database
 from utils.filters import extract_audio
-
-from config import Config
 
 router = Router(name="user")
 
 
 @router.message(F.audio | F.voice | F.document)
-async def handle_music(message: Message, bot: Bot, db: Database) -> None:
+async def handle_music(message: Message, bot: Bot, db: Database, config: Config) -> None:
     # 1) Must be connected via a deep link
     owner_id = await db.get_session_owner(message.from_user.id)
     if owner_id is None:
@@ -31,7 +30,22 @@ async def handle_music(message: Message, bot: Bot, db: Database) -> None:
         await message.answer("🚫 You are banned from sending music to this owner.")
         return
 
-    # 3) Strict music-only filter
+    # 3) Owner's settings (limit + captions)
+    settings = await db.get_settings(owner_id)
+
+    # 4) Daily rate limit — per-owner, only successful deliveries consume quota
+    limit = settings.daily_limit
+    sent_today = 0
+    if limit > 0:
+        sent_today = await db.count_messages_today(owner_id, anonymous_id)
+        if sent_today >= limit:
+            await message.answer(
+                "⏳ <b>Daily limit reached.</b>\n"
+                f"You can send {limit} songs per day — try again tomorrow. 🌙"
+            )
+            return
+
+    # 5) Strict music-only filter
     audio = extract_audio(message)
     if audio is None:
         await message.answer(
@@ -42,20 +56,18 @@ async def handle_music(message: Message, bot: Bot, db: Database) -> None:
         )
         return
 
-    # 4) Caption policy
-    settings = await db.get_settings(owner_id)
+    # 6) Caption policy
     if not settings.captions_allowed and message.caption:
         await message.answer(
             "✍️🚫 The owner disabled captions.\n"
-            "Send the music file without any text."
+            "Resend the music file without any text attached."
         )
         return
 
-    # 5) Deliver to the owner
+    # 7) Deliver to the owner
     prefix = f"🎧 <b>{anonymous_id}</b>"
 
     if message.voice:
-        # Voice messages can't carry captions → send ID as a reply underneath
         copied = await bot.copy_message(
             chat_id=owner_id,
             from_chat_id=message.chat.id,
@@ -82,7 +94,16 @@ async def handle_music(message: Message, bot: Bot, db: Database) -> None:
         )
 
     await db.log_message(owner_id, anonymous_id)
-    await message.answer("✅ Sent anonymously.")
+
+    # 8) Friendly confirmation with remaining quota
+    if limit > 0:
+        remaining = limit - sent_today - 1
+        if remaining > 0:
+            await message.answer(f"✅ Sent anonymously — {remaining} left today.")
+        else:
+            await message.answer("✅ Sent anonymously — that was your last song for today. 🌙")
+    else:
+        await message.answer("✅ Sent anonymously.")
 
 
 @router.message(F.text)

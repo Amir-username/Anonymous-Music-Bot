@@ -22,6 +22,7 @@ async def _owner_panel(message: Message, db: Database, config: Config) -> str:
         "<b>Commands</b>\n"
         "/link — show your inbox link\n"
         "/captions on | /captions off — allow or reject captions\n"
+        "/limit N — daily song limit per listener (or /limit off)\n"
         "/ban #ID — ban a sender\n"
         "/unban #ID — unban a sender\n"
         "/bans — list banned senders\n"
@@ -43,12 +44,20 @@ async def cmd_start(message: Message, command: CommandObject, db: Database, conf
 
         anonymous_id = await db.get_or_create_user(message.from_user.id, owner.owner_id)
         await db.set_session(message.from_user.id, owner.owner_id)
+
+        settings = await db.get_settings(owner.owner_id)
+        limit_note = (
+            f"\n📊 Limit: <b>{settings.daily_limit} songs per day</b>."
+            if settings.daily_limit > 0
+            else ""
+        )
         await message.answer(
             "🎧 <b>You're in!</b>\n\n"
             f"Your anonymous ID: <b>{anonymous_id}</b>\n\n"
             "Now just send an audio file or voice message — "
-            "the owner will receive it without ever knowing who you are.\n\n"
+            "the owner will receive it without ever knowing who you are.\n"
             "⚠️ Music files only — text is not delivered."
+            f"{limit_note}"
         )
         return
 
