@@ -3,6 +3,7 @@ from __future__ import annotations
 import html
 
 from aiogram import Bot, F, Router
+from aiogram.enums import ChatType
 from aiogram.types import Message, ReplyParameters
 
 from config import Config
@@ -10,6 +11,7 @@ from database.db import Database
 from utils.filters import extract_audio
 
 router = Router(name="user")
+router.message.filter(F.chat.type == ChatType.PRIVATE)
 
 
 @router.message(F.audio | F.voice | F.document)

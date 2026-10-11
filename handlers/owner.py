@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import re
 
-from aiogram import Router
+from aiogram import F, Router
+from aiogram.enums import ChatType
 from aiogram.filters import Command, CommandObject
 from aiogram.types import Message
 
@@ -10,6 +11,7 @@ from config import Config
 from database.db import Database
 
 router = Router(name="owner")
+router.message.filter(F.chat.type == ChatType.PRIVATE)
 
 # Matches the alphabet in anonymous_id.py (no 0/O, no 1/I)
 ANON_ID_RE = re.compile(r"^#[A-HJ-NP-Z2-9]{6}$")

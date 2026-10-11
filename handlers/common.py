@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from aiogram import Router
+from aiogram import F, Router
+from aiogram.enums import ChatType
 from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.types import Message
 
@@ -8,6 +9,7 @@ from config import Config
 from database.db import Database
 
 router = Router(name="common")
+router.message.filter(F.chat.type == ChatType.PRIVATE)
 
 
 async def _owner_panel(message: Message, db: Database, config: Config) -> str:
