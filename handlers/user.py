@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import html
+import math
+from datetime import datetime, timedelta, timezone
 
 from aiogram import Bot, F, Router
 from aiogram.enums import ChatType
@@ -13,6 +15,28 @@ from utils.replies import ReplyRegistry
 
 router = Router(name="user")
 router.message.filter(F.chat.type == ChatType.PRIVATE)
+
+# The "daily" limit is a rolling 24h window anchored to each user's own sends.
+# Temporarily set this to e.g. 0.05 (≈3 min) to test quota expiry quickly.
+QUOTA_WINDOW_HOURS = 24
+
+
+def _format_wait(oldest_iso: str | None) -> str:
+    """Human-readable time until the oldest track in the window leaves it."""
+    if oldest_iso:
+        anchor = datetime.fromisoformat(oldest_iso)
+    else:
+        anchor = datetime.now(timezone.utc)  # the track we just sent
+    seconds = (
+        anchor + timedelta(hours=QUOTA_WINDOW_HOURS) - datetime.now(timezone.utc)
+    ).total_seconds()
+    if seconds <= 0:
+        return "a few seconds"
+    total_min = max(1, math.ceil(seconds / 60))
+    h, m = divmod(total_min, 60)
+    if h == 0:
+        return f"{m} min"
+    return f"{h}h {m:02d}m"
 
 
 @router.message(F.audio | F.voice | F.document)
@@ -38,15 +62,20 @@ async def handle_music(
     # 3) Owner's settings (quota + captions + size)
     settings = await db.get_settings(owner_id)
 
-    # 4) Daily rate limit — tracks only, replies never consume the sender's quota
+    # 4) Rolling 24h limit — tracks only, replies never consume the sender's quota
     limit = settings.daily_limit
-    sent_today = 0
+    sent_recent = 0
+    oldest = None
     if limit > 0:
-        sent_today = await db.count_messages_today(owner_id, anonymous_id)
-        if sent_today >= limit:
+        sent_recent, oldest = await db.get_track_quota(
+            owner_id, anonymous_id, QUOTA_WINDOW_HOURS
+        )
+        if sent_recent >= limit:
+            wait = _format_wait(oldest)
             await message.answer(
-                "⏳ <b>Daily limit reached.</b>\n"
-                f"You can send {limit} songs per day — try again tomorrow. 🌙"
+                "⏳ <b>Limit reached.</b>\n"
+                f"You can send {limit} songs every 24 hours — "
+                f"the next one unlocks in <b>{wait}</b>."
             )
             return
 
@@ -117,11 +146,17 @@ async def handle_music(
 
     # 9) Friendly confirmation with remaining quota
     if limit > 0:
-        remaining = limit - sent_today - 1
+        remaining = limit - sent_recent - 1
         if remaining > 0:
-            await message.answer(f"✅ Sent anonymously — {remaining} left today.")
+            await message.answer(
+                f"✅ Sent anonymously — {remaining} more in the next 24 hours."
+            )
         else:
-            await message.answer("✅ Sent anonymously — that was your last song for today. 🌙")
+            wait = _format_wait(oldest)
+            await message.answer(
+                "✅ Sent anonymously — that was your last song for now. 🌙\n"
+                f"The next one unlocks in <b>{wait}</b>."
+            )
     else:
         await message.answer("✅ Sent anonymously.")
 

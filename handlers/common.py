@@ -24,7 +24,7 @@ async def _owner_panel(message: Message, db: Database, config: Config) -> str:
         "<b>Commands</b>\n"
         "/link — show your inbox link\n"
         "/captions on | /captions off — allow or reject captions\n"
-        "/limit N — daily song limit per listener (or /limit off)\n"
+        "/limit N — song limit per listener per 24h (or /limit off)\n"
         "/maxsize N — max file size in MB (or /maxsize off)\n"
         "/ban #ID — ban a sender\n"
         "/unban #ID — unban a sender\n"
@@ -52,7 +52,7 @@ async def cmd_start(message: Message, command: CommandObject, db: Database, conf
 
         settings = await db.get_settings(owner.owner_id)
         limit_note = (
-            f"\n📊 Limit: <b>{settings.daily_limit} songs per day</b>."
+            f"\n📊 Limit: <b>{settings.daily_limit} songs every 24 hours</b>."
             if settings.daily_limit > 0
             else ""
         )

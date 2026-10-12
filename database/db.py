@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import asyncpg
 from asyncpg.exceptions import UniqueViolationError
@@ -24,6 +24,10 @@ def _now() -> str:
 
 def _today() -> str:
     return datetime.now(timezone.utc).date().isoformat()
+
+
+def _hours_ago(hours: float) -> str:
+    return (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat(timespec="seconds")
 
 
 class Database:
@@ -240,16 +244,24 @@ class Database:
             owner_id, anonymous_id, kind, _now(),
         )
 
-    async def count_messages_today(self, owner_id: int, anonymous_id: str) -> int:
-        """Tracks delivered since UTC midnight for this anonymous ID (replies don't count).
+    async def get_track_quota(
+        self, owner_id: int, anonymous_id: str, window_hours: float = 24.0
+    ) -> tuple[int, str | None]:
+        """Rolling-window quota snapshot for this anonymous ID.
 
-        Works via string comparison because sent_at is ISO-8601.
+        Returns (tracks delivered within the last `window_hours`, ISO time of the
+        oldest of them). The oldest timestamp is the anchor: that track leaves
+        the window exactly 24h after it was sent, freeing one slot.
+
+        Works via string comparison because sent_at is ISO-8601 UTC —
+        lexicographic order equals chronological order.
         """
-        return await self._pool.fetchval(
-            "SELECT COUNT(*) FROM messages "
+        row = await self._pool.fetchrow(
+            "SELECT COUNT(*) AS c, MIN(sent_at) AS oldest FROM messages "
             "WHERE owner_id = $1 AND anonymous_id = $2 AND kind = 'track' AND sent_at >= $3",
-            owner_id, anonymous_id, _today(),
+            owner_id, anonymous_id, _hours_ago(window_hours),
         )
+        return row["c"], row["oldest"]
 
     # ---------- stats ----------
 

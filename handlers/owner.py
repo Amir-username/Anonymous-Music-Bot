@@ -73,12 +73,12 @@ async def cmd_limit(message: Message, command: CommandObject, db: Database, conf
 
     if not arg:
         current = (
-            f"<b>{settings.daily_limit} songs per day</b>"
+            f"<b>{settings.daily_limit} songs every 24 hours</b>"
             if settings.daily_limit > 0
             else "<b>unlimited</b>"
         )
         await message.answer(
-            f"📊 Daily limit: {current}.\n"
+            f"📊 Song limit: {current}.\n"
             "Usage: <code>/limit 10</code> (1–100) or <code>/limit off</code>"
         )
         return
@@ -97,7 +97,7 @@ async def cmd_limit(message: Message, command: CommandObject, db: Database, conf
 
     await db.set_daily_limit(config.owner_id, int(arg))
     await message.answer(
-        f"📊 Done — your inbox now accepts <b>{arg} song(s) per day</b> from each listener."
+        f"📊 Done — your inbox now accepts <b>{arg} song(s) every 24 hours</b> from each listener."
     )
 
 
@@ -190,12 +190,12 @@ async def cmd_status(message: Message, db: Database, config: Config) -> None:
         return
     stats = await db.get_stats(config.owner_id)
     settings = await db.get_settings(config.owner_id)
-    limit = f"{settings.daily_limit} songs/day" if settings.daily_limit > 0 else "unlimited"
+    limit = f"{settings.daily_limit} songs / 24h" if settings.daily_limit > 0 else "unlimited"
     size = f"{settings.max_file_mb} MB" if settings.max_file_mb > 0 else "unlimited"
     await message.answer(
         "📊 <b>Status</b>\n\n"
         f"✍️ Captions: {'allowed ✅' if settings.captions_allowed else 'disabled 🚫'}\n"
-        f"🎵 Daily limit: {limit}\n"
+        f"🎵 Song limit: {limit}\n"
         f"📦 Max file size: {size}\n"
         f"👥 Anonymous listeners: <b>{stats.users}</b>\n"
         f"🎧 Tracks delivered: <b>{stats.tracks}</b> (<b>{stats.tracks_today}</b> today)\n"
