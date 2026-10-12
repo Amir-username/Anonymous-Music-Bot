@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import html
 import math
 from datetime import datetime, timedelta, timezone
 
@@ -16,7 +15,7 @@ router = Router(name="user")
 router.message.filter(F.chat.type == ChatType.PRIVATE)
 
 # The "daily" limit is a rolling 24h window anchored to each user's own sends.
-# Temporarily set this to e.g. 0.05 (≈3 min) to test quota expiry quickly.
+# Temporarily set this to e.g. 0.05 (about 3 min) to test quota expiry quickly.
 QUOTA_WINDOW_HOURS = 24
 
 
@@ -25,12 +24,12 @@ def _format_wait(oldest_iso: str | None) -> str:
     if oldest_iso:
         anchor = datetime.fromisoformat(oldest_iso)
     else:
-        anchor = datetime.now(timezone.utc)  # the track we just sent
+        anchor = datetime.now(timezone.utc)
     seconds = (
         anchor + timedelta(hours=QUOTA_WINDOW_HOURS) - datetime.now(timezone.utc)
     ).total_seconds()
     if seconds <= 0:
-        return "a few seconds"
+        return "moments"
     total_min = max(1, math.ceil(seconds / 60))
     h, m = divmod(total_min, 60)
     if h == 0:
@@ -45,23 +44,20 @@ async def handle_music(
     # 1) Must be connected via a deep link
     owner_id = await db.get_session_owner(message.from_user.id)
     if owner_id is None:
-        await message.answer(
-            "👋 I deliver music anonymously to a specific person.\n"
-            "Open their personal link first — then send your music here."
-        )
+        await message.answer("Open the owner's personal link first.")
         return
 
     anonymous_id = await db.get_or_create_user(message.from_user.id, owner_id)
 
     # 2) Ban check
     if await db.is_banned(owner_id, anonymous_id):
-        await message.answer("🚫 You are banned from sending music to this owner.")
+        await message.answer("You are banned.")
         return
 
     # 3) Owner's settings (quota + captions + size)
     settings = await db.get_settings(owner_id)
 
-    # 4) Rolling 24h limit — tracks only, replies never consume the sender's quota
+    # 4) Rolling 24h limit - tracks only, replies never consume the sender's quota
     limit = settings.daily_limit
     sent_recent = 0
     oldest = None
@@ -70,11 +66,8 @@ async def handle_music(
             owner_id, anonymous_id, QUOTA_WINDOW_HOURS
         )
         if sent_recent >= limit:
-            wait = _format_wait(oldest)
             await message.answer(
-                "⏳ <b>Limit reached.</b>\n"
-                f"You can send {limit} songs every 24 hours — "
-                f"the next one unlocks in <b>{wait}</b>."
+                f"Limit reached. The next song unlocks in {_format_wait(oldest)}."
             )
             return
 
@@ -82,71 +75,44 @@ async def handle_music(
     if settings.max_file_mb > 0 and message.audio.file_size:
         if message.audio.file_size > settings.max_file_mb * 1024 * 1024:
             await message.answer(
-                "📦 This file is too big.\n"
-                f"The owner accepts tracks up to <b>{settings.max_file_mb} MB</b>."
+                f"File too large. Maximum is {settings.max_file_mb} MB."
             )
             return
 
     # 6) Caption policy
     if not settings.captions_allowed and message.caption:
-        await message.answer(
-            "✍️🚫 The owner disabled captions.\n"
-            "Resend the music file without any text attached."
-        )
+        await message.answer("Captions are off here. Send the file without a caption.")
         return
 
-    # 7) Deliver to the owner and remember the sender for anonymous replies
-    prefix = f"🎧 <b>{anonymous_id}</b>"
-    original = message.caption or ""
-    if settings.captions_allowed and original:
-        escaped = html.escape(original)
-        room = 1024 - len(prefix) - 1  # Telegram caption limit
-        caption = f"{prefix}\n{escaped[:room]}"
-    else:
-        caption = prefix
-
+    # 7) Deliver: ID first, then the track in the next message.
+    #    No caption override - the original caption (if allowed) is copied as-is.
+    header = await bot.send_message(owner_id, anonymous_id)
     sent = await bot.copy_message(
         chat_id=owner_id,
         from_chat_id=message.chat.id,
         message_id=message.message_id,
-        caption=caption,
     )
+    replies.record(owner_id, header.message_id, anonymous_id,
+                   message.from_user.id, message.message_id)
     replies.record(owner_id, sent.message_id, anonymous_id,
                    message.from_user.id, message.message_id)
 
     await db.log_message(owner_id, anonymous_id, kind="track")
 
-    # 8) Friendly confirmation with remaining quota
-    if limit > 0:
-        remaining = limit - sent_recent - 1
-        if remaining > 0:
-            await message.answer(
-                f"✅ Sent anonymously — {remaining} more in the next 24 hours."
-            )
-        else:
-            wait = _format_wait(oldest)
-            await message.answer(
-                "✅ Sent anonymously — that was your last song for now. 🌙\n"
-                f"The next one unlocks in <b>{wait}</b>."
-            )
-    else:
-        await message.answer("✅ Sent anonymously.")
+    # 8) No success message on purpose - silence means delivered.
 
 
 @router.message(F.text)
 async def handle_text(message: Message, db: Database, config: Config) -> None:
     if message.from_user.id == config.owner_id:
-        await message.answer("🤖 That's your own inbox! Send /help to see your commands.")
+        await message.answer("This is your own inbox. Send /help for commands.")
         return
     if await db.get_session_owner(message.from_user.id) is None:
-        await message.answer("👋 Open the owner's personal link first — then send music here.")
+        await message.answer("Open the owner's personal link first.")
     else:
-        await message.answer("🎵 Text isn't delivered. Send a music file (MP3, FLAC, OGG…).")
+        await message.answer("Text isn't delivered. Send a music file.")
 
 
 @router.message()
 async def handle_other(message: Message) -> None:
-    await message.answer(
-        "🎵 I accept <b>music files only</b> (MP3, FLAC, OGG…).\n"
-        "Voice messages, documents, and other content are not accepted."
-    )
+    await message.answer("Music files only (MP3, FLAC, OGG).")
