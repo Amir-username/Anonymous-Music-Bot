@@ -99,7 +99,8 @@ async def handle_music(
 
     await db.log_message(owner_id, anonymous_id, kind="track")
 
-    # 8) No success message on purpose - silence means delivered.
+    # 8) Minimal confirmation
+    await message.answer("Delivered")
 
 
 @router.message(F.text)

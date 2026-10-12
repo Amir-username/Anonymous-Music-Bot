@@ -83,6 +83,5 @@ async def cmd_help(message: Message, db: Database, config: Config) -> None:
         await message.answer(await _owner_panel(message, db, config))
         return
     await message.answer(
-        "Send a music file (MP3, FLAC, OGG).\n"
-        "Voice messages and documents are not accepted."
+        "Send a music file (MP3, FLAC, OGG)."
     )
