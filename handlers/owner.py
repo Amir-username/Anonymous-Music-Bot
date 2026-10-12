@@ -207,8 +207,8 @@ async def cmd_status(message: Message, db: Database, config: Config) -> None:
 # ---------- anonymous replies ----------
 
 def _is_delivery_message(m: Message) -> bool:
-    """The track media itself, or its '🎧 #ID' header message."""
-    if m.audio or m.voice or m.document:
+    """The delivered audio itself, or its '🎧 #ID' caption header."""
+    if m.audio:
         return True
     return (m.text or m.caption or "").startswith("🎧")
 

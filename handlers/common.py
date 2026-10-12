@@ -59,7 +59,7 @@ async def cmd_start(message: Message, command: CommandObject, db: Database, conf
         await message.answer(
             "🎧 <b>You're in!</b>\n\n"
             f"Your anonymous ID: <b>{anonymous_id}</b>\n\n"
-            "Now just send an audio file or voice message — "
+            "Now just send a music file (MP3, FLAC, OGG…) — "
             "the owner will receive it without ever knowing who you are.\n"
             "⚠️ Music files only — text is not delivered.\n"
             "💬 If the owner replies to your track, you'll see it here."
@@ -88,7 +88,8 @@ async def cmd_help(message: Message, db: Database, config: Config) -> None:
     await message.answer(
         "🎧 <b>How this works</b>\n\n"
         "1. Open the personal link the owner gave you.\n"
-        "2. Send an audio file or voice message.\n"
+        "2. Send a music file (MP3, FLAC, OGG…).\n"
         "3. Done — they receive it with your anonymous ID, never your name.\n\n"
-        "Accepted: audio files, voice messages, audio documents."
+        "Accepted: music files (MP3, FLAC, OGG…).\n"
+        "Voice messages and documents are not accepted."
     )

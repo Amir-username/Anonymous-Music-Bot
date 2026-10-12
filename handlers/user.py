@@ -6,11 +6,10 @@ from datetime import datetime, timedelta, timezone
 
 from aiogram import Bot, F, Router
 from aiogram.enums import ChatType
-from aiogram.types import Message, ReplyParameters
+from aiogram.types import Message
 
 from config import Config
 from database.db import Database
-from utils.filters import extract_audio
 from utils.replies import ReplyRegistry
 
 router = Router(name="user")
@@ -39,7 +38,7 @@ def _format_wait(oldest_iso: str | None) -> str:
     return f"{h}h {m:02d}m"
 
 
-@router.message(F.audio | F.voice | F.document)
+@router.message(F.audio)
 async def handle_music(
     message: Message, bot: Bot, db: Database, replies: ReplyRegistry
 ) -> None:
@@ -79,27 +78,16 @@ async def handle_music(
             )
             return
 
-    # 5) Strict music-only filter
-    media, _kind = extract_audio(message)
-    if media is None:
-        await message.answer(
-            "🎵 I accept music only:\n"
-            "• audio files\n"
-            "• voice messages\n"
-            "• documents with an audio file type"
-        )
-        return
-
-    # 6) Owner-configured file size limit
-    if settings.max_file_mb > 0 and media.file_size:
-        if media.file_size > settings.max_file_mb * 1024 * 1024:
+    # 5) Owner-configured file size limit
+    if settings.max_file_mb > 0 and message.audio.file_size:
+        if message.audio.file_size > settings.max_file_mb * 1024 * 1024:
             await message.answer(
                 "📦 This file is too big.\n"
                 f"The owner accepts tracks up to <b>{settings.max_file_mb} MB</b>."
             )
             return
 
-    # 7) Caption policy
+    # 6) Caption policy
     if not settings.captions_allowed and message.caption:
         await message.answer(
             "✍️🚫 The owner disabled captions.\n"
@@ -107,44 +95,28 @@ async def handle_music(
         )
         return
 
-    # 8) Deliver to the owner and remember the sender for anonymous replies
+    # 7) Deliver to the owner and remember the sender for anonymous replies
     prefix = f"🎧 <b>{anonymous_id}</b>"
-
-    if message.voice:
-        copied = await bot.copy_message(
-            chat_id=owner_id,
-            from_chat_id=message.chat.id,
-            message_id=message.message_id,
-        )
-        header = await bot.send_message(
-            owner_id,
-            prefix,
-            reply_parameters=ReplyParameters(message_id=copied.message_id),
-        )
-        replies.record(owner_id, copied.message_id, anonymous_id,
-                       message.from_user.id, message.message_id)
-        replies.record(owner_id, header.message_id, anonymous_id,
-                       message.from_user.id, message.message_id)
+    original = message.caption or ""
+    if settings.captions_allowed and original:
+        escaped = html.escape(original)
+        room = 1024 - len(prefix) - 1  # Telegram caption limit
+        caption = f"{prefix}\n{escaped[:room]}"
     else:
-        original = message.caption or ""
-        if settings.captions_allowed and original:
-            escaped = html.escape(original)
-            room = 1024 - len(prefix) - 1  # Telegram caption limit
-            caption = f"{prefix}\n{escaped[:room]}"
-        else:
-            caption = prefix
-        sent = await bot.copy_message(
-            chat_id=owner_id,
-            from_chat_id=message.chat.id,
-            message_id=message.message_id,
-            caption=caption,
-        )
-        replies.record(owner_id, sent.message_id, anonymous_id,
-                       message.from_user.id, message.message_id)
+        caption = prefix
+
+    sent = await bot.copy_message(
+        chat_id=owner_id,
+        from_chat_id=message.chat.id,
+        message_id=message.message_id,
+        caption=caption,
+    )
+    replies.record(owner_id, sent.message_id, anonymous_id,
+                   message.from_user.id, message.message_id)
 
     await db.log_message(owner_id, anonymous_id, kind="track")
 
-    # 9) Friendly confirmation with remaining quota
+    # 8) Friendly confirmation with remaining quota
     if limit > 0:
         remaining = limit - sent_recent - 1
         if remaining > 0:
@@ -169,9 +141,12 @@ async def handle_text(message: Message, db: Database, config: Config) -> None:
     if await db.get_session_owner(message.from_user.id) is None:
         await message.answer("👋 Open the owner's personal link first — then send music here.")
     else:
-        await message.answer("🎵 Text isn't delivered. Send an audio file or voice message.")
+        await message.answer("🎵 Text isn't delivered. Send a music file (MP3, FLAC, OGG…).")
 
 
 @router.message()
 async def handle_other(message: Message) -> None:
-    await message.answer("🎵 I accept music only: audio files or voice messages.")
+    await message.answer(
+        "🎵 I accept <b>music files only</b> (MP3, FLAC, OGG…).\n"
+        "Voice messages, documents, and other content are not accepted."
+    )
