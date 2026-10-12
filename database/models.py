@@ -40,7 +40,8 @@ SCHEMA_STATEMENTS = (
     CREATE TABLE IF NOT EXISTS settings (
         owner_id         BIGINT PRIMARY KEY REFERENCES owners(owner_id),
         captions_allowed INTEGER NOT NULL DEFAULT 1,
-        daily_limit      INTEGER NOT NULL DEFAULT 5
+        daily_limit      INTEGER NOT NULL DEFAULT 5,
+        max_file_mb      INTEGER NOT NULL DEFAULT 0
     )
     """,
     """
@@ -48,6 +49,7 @@ SCHEMA_STATEMENTS = (
         id           BIGSERIAL PRIMARY KEY,
         owner_id     BIGINT NOT NULL REFERENCES owners(owner_id),
         anonymous_id TEXT,
+        kind         TEXT    NOT NULL DEFAULT 'track',
         sent_at      TEXT    NOT NULL
     )
     """,
@@ -66,6 +68,7 @@ class OwnerSettings:
     owner_id: int
     captions_allowed: bool
     daily_limit: int
+    max_file_mb: int
 
 
 @dataclass
@@ -79,5 +82,7 @@ class AnonymousUser:
 @dataclass
 class OwnerStats:
     users: int
-    messages: int
+    tracks: int
+    tracks_today: int
+    replies: int
     bans: int

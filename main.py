@@ -10,6 +10,7 @@ from aiogram.enums import ParseMode
 from config import get_config
 from database.db import Database
 from handlers import common, errors, owner, user
+from utils.replies import ReplyRegistry
 
 
 async def health(request: web.Request) -> web.Response:
@@ -28,14 +29,17 @@ async def main() -> None:
     await db.initialize()
     await db.ensure_owner(config.owner_id)  # bootstrap the primary owner
 
+    replies = ReplyRegistry()  # RAM-only routing for the anonymous reply system
+
     bot = Bot(
         token=config.bot_token,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
     dp = Dispatcher()
     dp.include_routers(errors.router, owner.router, common.router, user.router)
-    dp["db"] = db        # injected into handlers that request `db`
+    dp["db"] = db          # injected into handlers that request `db`
     dp["config"] = config  # injected into handlers that request `config`
+    dp["replies"] = replies  # injected into handlers that request `replies`
 
     app = web.Application()
     app.router.add_get("/", health)

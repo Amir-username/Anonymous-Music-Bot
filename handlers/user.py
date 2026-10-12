@@ -9,13 +9,16 @@ from aiogram.types import Message, ReplyParameters
 from config import Config
 from database.db import Database
 from utils.filters import extract_audio
+from utils.replies import ReplyRegistry
 
 router = Router(name="user")
 router.message.filter(F.chat.type == ChatType.PRIVATE)
 
 
 @router.message(F.audio | F.voice | F.document)
-async def handle_music(message: Message, bot: Bot, db: Database, config: Config) -> None:
+async def handle_music(
+    message: Message, bot: Bot, db: Database, replies: ReplyRegistry
+) -> None:
     # 1) Must be connected via a deep link
     owner_id = await db.get_session_owner(message.from_user.id)
     if owner_id is None:
@@ -32,10 +35,10 @@ async def handle_music(message: Message, bot: Bot, db: Database, config: Config)
         await message.answer("🚫 You are banned from sending music to this owner.")
         return
 
-    # 3) Owner's settings (limit + captions)
+    # 3) Owner's settings (quota + captions + size)
     settings = await db.get_settings(owner_id)
 
-    # 4) Daily rate limit — per-owner, only successful deliveries consume quota
+    # 4) Daily rate limit — tracks only, replies never consume the sender's quota
     limit = settings.daily_limit
     sent_today = 0
     if limit > 0:
@@ -48,8 +51,8 @@ async def handle_music(message: Message, bot: Bot, db: Database, config: Config)
             return
 
     # 5) Strict music-only filter
-    audio = extract_audio(message)
-    if audio is None:
+    media, _kind = extract_audio(message)
+    if media is None:
         await message.answer(
             "🎵 I accept music only:\n"
             "• audio files\n"
@@ -58,7 +61,16 @@ async def handle_music(message: Message, bot: Bot, db: Database, config: Config)
         )
         return
 
-    # 6) Caption policy
+    # 6) Owner-configured file size limit
+    if settings.max_file_mb > 0 and media.file_size:
+        if media.file_size > settings.max_file_mb * 1024 * 1024:
+            await message.answer(
+                "📦 This file is too big.\n"
+                f"The owner accepts tracks up to <b>{settings.max_file_mb} MB</b>."
+            )
+            return
+
+    # 7) Caption policy
     if not settings.captions_allowed and message.caption:
         await message.answer(
             "✍️🚫 The owner disabled captions.\n"
@@ -66,7 +78,7 @@ async def handle_music(message: Message, bot: Bot, db: Database, config: Config)
         )
         return
 
-    # 7) Deliver to the owner
+    # 8) Deliver to the owner and remember the sender for anonymous replies
     prefix = f"🎧 <b>{anonymous_id}</b>"
 
     if message.voice:
@@ -75,11 +87,15 @@ async def handle_music(message: Message, bot: Bot, db: Database, config: Config)
             from_chat_id=message.chat.id,
             message_id=message.message_id,
         )
-        await bot.send_message(
+        header = await bot.send_message(
             owner_id,
             prefix,
             reply_parameters=ReplyParameters(message_id=copied.message_id),
         )
+        replies.record(owner_id, copied.message_id, anonymous_id,
+                       message.from_user.id, message.message_id)
+        replies.record(owner_id, header.message_id, anonymous_id,
+                       message.from_user.id, message.message_id)
     else:
         original = message.caption or ""
         if settings.captions_allowed and original:
@@ -88,16 +104,18 @@ async def handle_music(message: Message, bot: Bot, db: Database, config: Config)
             caption = f"{prefix}\n{escaped[:room]}"
         else:
             caption = prefix
-        await bot.copy_message(
+        sent = await bot.copy_message(
             chat_id=owner_id,
             from_chat_id=message.chat.id,
             message_id=message.message_id,
             caption=caption,
         )
+        replies.record(owner_id, sent.message_id, anonymous_id,
+                       message.from_user.id, message.message_id)
 
-    await db.log_message(owner_id, anonymous_id)
+    await db.log_message(owner_id, anonymous_id, kind="track")
 
-    # 8) Friendly confirmation with remaining quota
+    # 9) Friendly confirmation with remaining quota
     if limit > 0:
         remaining = limit - sent_today - 1
         if remaining > 0:

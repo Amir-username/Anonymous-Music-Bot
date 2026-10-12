@@ -22,6 +22,10 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+def _today() -> str:
+    return datetime.now(timezone.utc).date().isoformat()
+
+
 class Database:
     def __init__(self, dsn: str, hash_secret: str, default_daily_limit: int = 5) -> None:
         self.dsn = dsn
@@ -45,6 +49,13 @@ class Database:
     async def initialize(self) -> None:
         for statement in SCHEMA_STATEMENTS:
             await self._pool.execute(statement)
+        # Idempotent migrations for databases created before Phase 8
+        await self._pool.execute(
+            "ALTER TABLE messages ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'track'"
+        )
+        await self._pool.execute(
+            "ALTER TABLE settings ADD COLUMN IF NOT EXISTS max_file_mb INTEGER NOT NULL DEFAULT 0"
+        )
         logger.info("Database schema ready")
 
     async def close(self) -> None:
@@ -183,14 +194,20 @@ class Database:
 
     async def get_settings(self, owner_id: int) -> OwnerSettings:
         row = await self._pool.fetchrow(
-            "SELECT owner_id, captions_allowed, daily_limit FROM settings WHERE owner_id = $1",
+            "SELECT owner_id, captions_allowed, daily_limit, max_file_mb "
+            "FROM settings WHERE owner_id = $1",
             owner_id,
         )
         if row:
-            return OwnerSettings(row["owner_id"], bool(row["captions_allowed"]), row["daily_limit"])
+            return OwnerSettings(
+                row["owner_id"],
+                bool(row["captions_allowed"]),
+                row["daily_limit"],
+                row["max_file_mb"],
+            )
         # Row missing — self-heal with defaults
         await self.set_captions_allowed(owner_id, True)
-        return OwnerSettings(owner_id, True, self._default_daily_limit)
+        return OwnerSettings(owner_id, True, self._default_daily_limit, 0)
 
     async def set_captions_allowed(self, owner_id: int, allowed: bool) -> None:
         await self._pool.execute(
@@ -207,31 +224,31 @@ class Database:
             owner_id, limit,
         )
 
-    # ---------- messages (for future stats/replies) ----------
-
-    async def log_message(self, owner_id: int, anonymous_id: str | None) -> None:
+    async def set_max_file_size(self, owner_id: int, max_mb: int) -> None:
+        """max_mb = 0 means unlimited (Telegram's own limits apply)."""
         await self._pool.execute(
-            "INSERT INTO messages (owner_id, anonymous_id, sent_at) VALUES ($1, $2, $3)",
-            owner_id, anonymous_id, _now(),
+            "INSERT INTO settings (owner_id, captions_allowed, max_file_mb) VALUES ($1, 1, $2) "
+            "ON CONFLICT (owner_id) DO UPDATE SET max_file_mb = $2",
+            owner_id, max_mb,
         )
 
-    async def count_messages(self, owner_id: int) -> int:
-        return await self._pool.fetchval(
-            "SELECT COUNT(*) FROM messages WHERE owner_id = $1",
-            owner_id,
+    # ---------- messages (tracks + replies) ----------
+
+    async def log_message(self, owner_id: int, anonymous_id: str | None, kind: str = "track") -> None:
+        await self._pool.execute(
+            "INSERT INTO messages (owner_id, anonymous_id, kind, sent_at) VALUES ($1, $2, $3, $4)",
+            owner_id, anonymous_id, kind, _now(),
         )
 
     async def count_messages_today(self, owner_id: int, anonymous_id: str) -> int:
-        """Deliveries since UTC midnight for this anonymous ID.
+        """Tracks delivered since UTC midnight for this anonymous ID (replies don't count).
 
-        Works via string comparison because sent_at is ISO-8601:
-        everything from today starts with today's date prefix.
+        Works via string comparison because sent_at is ISO-8601.
         """
-        today = datetime.now(timezone.utc).date().isoformat()
         return await self._pool.fetchval(
             "SELECT COUNT(*) FROM messages "
-            "WHERE owner_id = $1 AND anonymous_id = $2 AND sent_at >= $3",
-            owner_id, anonymous_id, today,
+            "WHERE owner_id = $1 AND anonymous_id = $2 AND kind = 'track' AND sent_at >= $3",
+            owner_id, anonymous_id, _today(),
         )
 
     # ---------- stats ----------
@@ -239,9 +256,18 @@ class Database:
     async def get_stats(self, owner_id: int) -> OwnerStats:
         row = await self._pool.fetchrow(
             "SELECT "
-            "(SELECT COUNT(*) FROM users WHERE owner_id = $1)    AS users, "
-            "(SELECT COUNT(*) FROM messages WHERE owner_id = $1) AS messages, "
-            "(SELECT COUNT(*) FROM bans WHERE owner_id = $1)     AS bans",
-            owner_id,
+            "(SELECT COUNT(*) FROM users WHERE owner_id = $1)                       AS users, "
+            "(SELECT COUNT(*) FROM messages WHERE owner_id = $1 AND kind = 'track') AS tracks, "
+            "(SELECT COUNT(*) FROM messages WHERE owner_id = $1 AND kind = 'track' "
+            " AND sent_at >= $2)                                                    AS tracks_today, "
+            "(SELECT COUNT(*) FROM messages WHERE owner_id = $1 AND kind = 'reply') AS replies, "
+            "(SELECT COUNT(*) FROM bans WHERE owner_id = $1)                        AS bans",
+            owner_id, _today(),
         )
-        return OwnerStats(users=row["users"], messages=row["messages"], bans=row["bans"])
+        return OwnerStats(
+            users=row["users"],
+            tracks=row["tracks"],
+            tracks_today=row["tracks_today"],
+            replies=row["replies"],
+            bans=row["bans"],
+        )

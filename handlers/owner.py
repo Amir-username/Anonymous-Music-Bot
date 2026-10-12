@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+import html
 import re
 
-from aiogram import F, Router
+from aiogram import Bot, F, Router
 from aiogram.enums import ChatType
-from aiogram.filters import Command, CommandObject
-from aiogram.types import Message
+from aiogram.exceptions import TelegramForbiddenError
+from aiogram.filters import Command, CommandObject, Filter
+from aiogram.types import Message, ReplyParameters
 
 from config import Config
 from database.db import Database
+from utils.replies import ReplyRegistry
 
 router = Router(name="owner")
 router.message.filter(F.chat.type == ChatType.PRIVATE)
@@ -16,6 +19,7 @@ router.message.filter(F.chat.type == ChatType.PRIVATE)
 # Matches the alphabet in anonymous_id.py (no 0/O, no 1/I)
 ANON_ID_RE = re.compile(r"^#[A-HJ-NP-Z2-9]{6}$")
 LIMIT_MAX = 100
+MAX_FILE_MAX = 2000  # MB; Telegram itself allows up to 2 GB
 
 
 async def _ensure_owner(message: Message, config: Config) -> bool:
@@ -97,6 +101,42 @@ async def cmd_limit(message: Message, command: CommandObject, db: Database, conf
     )
 
 
+@router.message(Command("maxsize"))
+async def cmd_maxsize(message: Message, command: CommandObject, db: Database, config: Config) -> None:
+    if not await _ensure_owner(message, config):
+        return
+
+    arg = (command.args or "").strip().lower()
+    settings = await db.get_settings(config.owner_id)
+
+    if not arg:
+        current = (
+            f"<b>{settings.max_file_mb} MB</b>"
+            if settings.max_file_mb > 0
+            else "<b>unlimited</b>"
+        )
+        await message.answer(
+            f"📦 Max file size: {current}.\n"
+            f"Usage: <code>/maxsize 50</code> (1–{MAX_FILE_MAX} MB) or <code>/maxsize off</code>"
+        )
+        return
+
+    if arg in ("off", "unlimited"):
+        await db.set_max_file_size(config.owner_id, 0)
+        await message.answer("✅ Size limit removed — Telegram's own limits apply (up to 2 GB).")
+        return
+
+    if not arg.isdigit() or int(arg) > MAX_FILE_MAX or int(arg) < 1:
+        await message.answer(
+            f"⚠️ Give me a number from 1 to {MAX_FILE_MAX} (MB), or <code>off</code>.\n"
+            "Example: <code>/maxsize 50</code>"
+        )
+        return
+
+    await db.set_max_file_size(config.owner_id, int(arg))
+    await message.answer(f"📦 Done — tracks bigger than <b>{arg} MB</b> will be rejected.")
+
+
 @router.message(Command("ban"))
 async def cmd_ban(message: Message, command: CommandObject, db: Database, config: Config) -> None:
     if not await _ensure_owner(message, config):
@@ -151,11 +191,83 @@ async def cmd_status(message: Message, db: Database, config: Config) -> None:
     stats = await db.get_stats(config.owner_id)
     settings = await db.get_settings(config.owner_id)
     limit = f"{settings.daily_limit} songs/day" if settings.daily_limit > 0 else "unlimited"
+    size = f"{settings.max_file_mb} MB" if settings.max_file_mb > 0 else "unlimited"
     await message.answer(
         "📊 <b>Status</b>\n\n"
         f"✍️ Captions: {'allowed ✅' if settings.captions_allowed else 'disabled 🚫'}\n"
         f"🎵 Daily limit: {limit}\n"
+        f"📦 Max file size: {size}\n"
         f"👥 Anonymous listeners: <b>{stats.users}</b>\n"
-        f"🎧 Tracks delivered: <b>{stats.messages}</b>\n"
+        f"🎧 Tracks delivered: <b>{stats.tracks}</b> (<b>{stats.tracks_today}</b> today)\n"
+        f"💬 Replies sent: <b>{stats.replies}</b>\n"
         f"🚫 Banned: <b>{stats.bans}</b>"
     )
+
+
+# ---------- anonymous replies ----------
+
+def _is_delivery_message(m: Message) -> bool:
+    """The track media itself, or its '🎧 #ID' header message."""
+    if m.audio or m.voice or m.document:
+        return True
+    return (m.text or m.caption or "").startswith("🎧")
+
+
+class OwnerReplyToDelivery(Filter):
+    """Matches messages the owner sent as a reply to a delivered track."""
+
+    async def __call__(self, message: Message, bot: Bot) -> bool:
+        target = message.reply_to_message
+        if not (target and target.from_user and target.from_user.id == bot.id):
+            return False
+        return _is_delivery_message(target)
+
+
+@router.message(OwnerReplyToDelivery())
+async def handle_owner_reply(
+    message: Message, bot: Bot, db: Database, replies: ReplyRegistry
+) -> None:
+    rec = replies.lookup(message.from_user.id, message.reply_to_message.message_id)
+    if rec is None:
+        await message.answer(
+            "⚠️ I can't route replies to this one — I was restarted after it arrived. "
+            "The sender's mapping is kept in memory only, for privacy."
+        )
+        return
+
+    note = "💬 <b>Reply about your track:</b>"
+    reply_params = ReplyParameters(
+        message_id=rec.sender_message_id, allow_sending_without_reply=True
+    )
+    try:
+        if message.text:
+            await bot.send_message(
+                rec.sender_telegram_id,
+                f"{note}\n\n{html.escape(message.text)}",
+                reply_parameters=reply_params,
+            )
+        elif message.voice:
+            await bot.send_message(
+                rec.sender_telegram_id, note, reply_parameters=reply_params
+            )
+            await bot.copy_message(rec.sender_telegram_id, message.chat.id, message.message_id)
+        elif message.audio or (
+            message.document
+            and message.document.mime_type
+            and message.document.mime_type.startswith("audio/")
+        ):
+            await bot.copy_message(
+                rec.sender_telegram_id,
+                message.chat.id,
+                message.message_id,
+                caption=note,
+            )
+        else:
+            await message.answer("⚠️ I can deliver text, voice, or audio as a reply — nothing else.")
+            return
+    except TelegramForbiddenError:
+        await message.answer("⚠️ Couldn't deliver — this listener has blocked the bot.")
+        return
+
+    await db.log_message(message.from_user.id, rec.anonymous_id, kind="reply")
+    await message.answer(f"✅ Delivered to {rec.anonymous_id}.")

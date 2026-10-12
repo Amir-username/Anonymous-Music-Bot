@@ -25,11 +25,14 @@ async def _owner_panel(message: Message, db: Database, config: Config) -> str:
         "/link — show your inbox link\n"
         "/captions on | /captions off — allow or reject captions\n"
         "/limit N — daily song limit per listener (or /limit off)\n"
+        "/maxsize N — max file size in MB (or /maxsize off)\n"
         "/ban #ID — ban a sender\n"
         "/unban #ID — unban a sender\n"
         "/bans — list banned senders\n"
         "/status — settings and statistics\n"
-        "/help — show this panel"
+        "/help — show this panel\n\n"
+        "💡 To answer a listener, swipe-reply to their track — "
+        "they'll get your message without anyone learning who they are."
     )
 
 
@@ -58,7 +61,8 @@ async def cmd_start(message: Message, command: CommandObject, db: Database, conf
             f"Your anonymous ID: <b>{anonymous_id}</b>\n\n"
             "Now just send an audio file or voice message — "
             "the owner will receive it without ever knowing who you are.\n"
-            "⚠️ Music files only — text is not delivered."
+            "⚠️ Music files only — text is not delivered.\n"
+            "💬 If the owner replies to your track, you'll see it here."
             f"{limit_note}"
         )
         return
